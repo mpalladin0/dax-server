@@ -9,7 +9,7 @@ async function bootstrap() {
   // await redisIoAdapter.connectToRedis();
   // app.useWebSocketAdapter(rediswIoAdapter);
 
-  await app.listen(3030 || process.env.PORT);
+  await app.listen(process.env.PORT || 3030);
   console.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();
