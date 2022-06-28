@@ -5,7 +5,38 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from "@nestjs/websockets";
+import { randomUUID } from "crypto";
 import { Server, Socket } from "socket.io";
+
+const wrap = (middleware) => (socket, next) =>
+  middleware(socket.request, {}, next);
+
+class SessionRoom {
+  public host: Socket;
+  public readonly listeners: Socket[] = [];
+  public readonly id = randomUUID();
+
+  public currentTime: number = 0;
+
+  uuid: string;
+
+  // @WebSocketServer()
+  server: Server;
+
+  constructor(host: Socket) {
+    this.host = host;
+
+    this.uuid = randomUUID();
+    this.listeners.push(host);
+
+    host.join(this.uuid);
+  }
+
+  public join(listener: Socket) {
+    listener.join(this.uuid);
+    this.listeners.push(listener);
+  }
+}
 
 @WebSocketGateway({
   cors: {
@@ -24,10 +55,23 @@ export class EventsGateway {
 
   paired = new Map();
 
+  activeDesktopConnections = new Set();
+
+  activeSessions = new Map<string, SessionRoom>();
+
+  // sessions = new Map<string, Session>();
+
   @WebSocketServer()
   server: Server;
 
-  constructor() {}
+  constructor() {
+    // this.server.use(wrap(sessionMiddleware));
+    // this.hanldeOnConnection();
+  }
+  @SubscribeMessage("connection")
+  onConnection(@ConnectedSocket() socket: Socket): void {
+    console.log(socket);
+  }
 
   @SubscribeMessage("mobile connection")
   onMobileConnection(@ConnectedSocket() socket: Socket): void {
@@ -53,7 +97,100 @@ export class EventsGateway {
     this.controller_desktop.set(socket.id, false);
 
     this.available_desktop.add(socket.id);
+
+    // console.log(socket.request.headers);
+
+    // contains
+
+    // const ip = socket.request.headers["x-forwarded-for"] as string;
+    // this.activeDesktopConnections.add(ip);
+
+    // if (this.activeDesktopConnections.has(ip)) {
+    //   if (this.activeSessions.has(ip)) {
+    //     console.log("Returning user to active session...");
+
+    //     console.log(ip + ": ", this.activeSessions.get(ip).uuid);
+    //   } else {
+    //     console.log("Creating new session for ", ip);
+    //     this.activeSessions.set(ip, new SessionRoom(socket));
+    //   }
+    // }
+
+    // for (let header in socket.request.headers) {
+    //   if (header === "x-forwarded-for") {
+    //     console.log(socket.request.headers[header]);
+    //   }
+    // }
+
+    // const has = contains(socket.request.headers, "x-forwarded-for");
+    // console.log(has);
+
+    // @ts-ignore
+    // const session = socket.request.headers;
+    // console.log(session);
+
+    // const room = new Room(socket);
+
+    // const convertBlock = (buffer) => {
+    //   // incoming data is an ArrayBuffer
+    //   const incomingData = new Uint8Array(buffer); // create a uint8 view on the ArrayBuffer
+    //   let i,
+    //     l = incomingData.length; // length, we need this for the loop
+    //   let outputData = new Float32Array(incomingData.length); // create the Float32Array for output
+    //   for (i = 0; i < l; i++) {
+    //     outputData[i] = (incomingData[i] - 128) / 128.0; // convert audio to float
+    //   }
+    //   return outputData; // return the Float32Array
+    // };
+
+    // const url = "https://dax.michaelpalladino.io/assets/sounds/alright.mp3";
+    // https.get(url, (stream) => {
+    //   stream.on("data", (chunk) => {
+    //     const toFloatArr = convertBlock(chunk);
+    //     this.server.emit("audio buffer", toFloatArr);
+    //   });
+    // });
+
+    // const buffer = new Audio(
+    //   "https://dax.michaelpalladino.io/assets/sounds/alright.mp3"
+    // );
+
+    // console.log(ctx);
+
+    // buffer.load();
+    // buffer.onload = (e) => {
+    //   console.log(e);
+    // };
+
+    // if (this.sessions.has(socket.id))
+    //   this.server.emit(
+    //     "returning to session",
+    //     socket.id,
+    //     this.sessions.get(socket.id).sessionId
+    //   );
+
+    // if (!this.sessions.has(socket.id)) {
+    //   const session = new Session();
+    //   session.listeners.add(socket.id);
+
+    //   this.sessions.set(socket.id, session);
+
+    //   this.server.emit("session created", socket.id, session);
+    // }
+
+    // this.server.emit("audio buffer")
+
     // this.server.emit("new DESKTOP_CONTROLLER avaliable", socket.id)
+  }
+
+  @SubscribeMessage("join session room")
+  onJoinSessionRoom(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() sessionRoomId: string
+  ) {
+    const room = this.activeSessions.get(sessionRoomId);
+    if (!room) throw new Error("Session not foudn");
+    room.join(socket);
   }
 
   @SubscribeMessage("device motion data")

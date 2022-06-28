@@ -1,8 +1,17 @@
 import { NestFactory } from "@nestjs/core";
+import * as session from "express-session";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  app.use(
+    session({
+      secret: "randomsecret",
+      resave: false,
+      saveUninitialized: false,
+    })
+  );
 
   // Uncomment these lines to use the Redis adapter:
   // const redisIoAdapter = new RedisIoAdapter(app);
