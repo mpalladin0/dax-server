@@ -8,35 +8,169 @@ import {
 import { randomUUID } from "crypto";
 import { Server, Socket } from "socket.io";
 
+const desktopConnections = new Set<string>();
+const sessions = new Map<string, Room>();
+
+/**
+ * <Room ID, Room Object>
+ */
+const rooms = new Map<string, Room>();
+
+/** <ip, user> */
+const users = new Map<string, User>();
+
+class Controller {
+  public readonly id: string;
+  public readonly belonngsTo: User;
+  public readonly socket: Socket;
+
+  constructor({
+    id,
+    user,
+    socket,
+  }: {
+    id: string;
+    user: User;
+    socket: Socket;
+  }) {
+    this.id = id;
+    this.belonngsTo = user;
+    this.socket = socket;
+  }
+}
+
+class User {
+  public readonly ip: string;
+  public currentRoom: Room = null;
+  public readonly sockets = new Set<Socket>();
+  private readonly server: Server;
+
+  public controller;
+
+  constructor({
+    ip,
+    firstSocket,
+    server,
+  }: {
+    ip: string;
+    firstSocket: Socket;
+    server: Server;
+  }) {
+    this.ip = ip;
+    this.sockets.add(firstSocket);
+    this.server = server;
+  }
+
+  public joinRoom = ({ id }: { id: string }) => {
+    this.sockets.forEach((socket) => {
+      console.log(`[Dax] Socket of `, this.ip, ` joining room ${id}`);
+      socket.join(id);
+    });
+
+    this.currentRoom = rooms.get(id);
+
+    console.log(`[Dax] User ${this.ip} joined room ${this.currentRoom.id}`);
+
+    // this.server.to(id).emit("user joined room");
+  };
+
+  public pairController = ({
+    controllerId,
+    socket,
+    roomId,
+  }: {
+    controllerId: string;
+    socket: Socket;
+    roomId: string;
+  }) => {
+    socket.join(roomId);
+
+    this.controller = new Controller({
+      id: controllerId,
+      socket: socket,
+      user: this,
+    });
+  };
+}
+class Room {
+  readonly id: string;
+  host: User;
+  isPlaying = false;
+  isActive = true;
+  controller: Controller;
+  readonly listeners = new Set<User>();
+
+  constructor(id: string, server: Server, host: User) {
+    rooms.set(id, this);
+    this.id = id;
+    this.host = host;
+  }
+}
+
+/**
+ * <User IP, Room Id>
+ */
+const activeRooms = new Map<string, string>();
+
+const memoDesktopConnections = () => {
+  let cache = {};
+
+  return (ip, socket: Socket, server: Server) => {
+    if (ip in cache) {
+      const user = users.get(ip);
+      user.sockets.add(socket);
+
+      user.sockets.forEach((socket) => {
+        if (!socket.connected) {
+          socket.disconnect();
+          user.sockets.delete(socket);
+        }
+      });
+
+      if (user.currentRoom) {
+        user.sockets.forEach((socket) => {
+          socket.join(user.currentRoom.id);
+        });
+      }
+
+      return cache[ip];
+    } else {
+      let state = ip;
+      cache[ip] = state;
+
+      console.log(
+        "User doesn't exist, creating a new object to represent them."
+      );
+      const user = new User({
+        ip,
+        firstSocket: socket,
+        server: server,
+      });
+
+      users.set(ip, user);
+
+      return true;
+    }
+  };
+};
+
+const addDesktopConnection = memoDesktopConnections();
+
 const wrap = (middleware) => (socket, next) =>
   middleware(socket.request, {}, next);
 
-class SessionRoom {
-  public host: Socket;
-  public readonly listeners: Socket[] = [];
-  public readonly id = randomUUID();
+const usingXRViewer = (
+  userAgent: Socket["request"]["headers"]["user-agent"]
+) => {
+  const searchFor = ["WebXRViewer"];
 
-  public currentTime: number = 0;
+  return searchFor.some((el) => {
+    return userAgent.includes(el);
+  });
+};
 
-  uuid: string;
-
-  // @WebSocketServer()
-  server: Server;
-
-  constructor(host: Socket) {
-    this.host = host;
-
-    this.uuid = randomUUID();
-    this.listeners.push(host);
-
-    host.join(this.uuid);
-  }
-
-  public join(listener: Socket) {
-    listener.join(this.uuid);
-    this.listeners.push(listener);
-  }
-}
+const ipFromHeaders = (socket: Socket) =>
+  socket.request.headers["x-forwarded-for"] as string;
 
 @WebSocketGateway({
   cors: {
@@ -56,8 +190,6 @@ export class EventsGateway {
   paired = new Map();
 
   activeDesktopConnections = new Set();
-
-  activeSessions = new Map<string, SessionRoom>();
 
   // sessions = new Map<string, Session>();
 
@@ -83,6 +215,8 @@ export class EventsGateway {
     this.controller_mobile.set(socket.id, false);
     this.available_mobile.add(socket.id);
 
+    // console.log(usingXRViewer(socket.request.headers["user-agent"]));
+
     this.server.emit("new mobile connection");
 
     this.server.emit("phone paired to desktop", socket.id);
@@ -90,13 +224,35 @@ export class EventsGateway {
 
   @SubscribeMessage("desktop connection")
   onDesktopConnection(@ConnectedSocket() socket: Socket): void {
-    console.log("[Dax] New DESKTOP_CONNECTION connection " + socket.id);
+    // console.log("[Dax] New DESKTOP_CONNECTION connection " + socket.id);
     if (this.controller_desktop.has(socket.id)) {
       return;
     }
     this.controller_desktop.set(socket.id, false);
-
     this.available_desktop.add(socket.id);
+
+    const ip = socket.request.headers["x-forwarded-for"] as string;
+    addDesktopConnection(ip, socket, this.server);
+
+    console.log("Checking desktop connection for rooms..");
+
+    const user = users.get(ip);
+    if (!user) return;
+
+    const room = user.currentRoom;
+    if (!room) return;
+
+    console.log(`[Dax] ${user.ip} room: ${room.id}`);
+
+    // console.log(ip);
+    // if (desktopConnections.has(ip)) {
+    //   memoizeDesktopConnections();
+    //   console.log("returning user");
+    // } // logic for returning user
+    // else {
+    //   console.log("new user");
+    //   desktopConnections.add(ip);
+    // }
 
     // console.log(socket.request.headers);
 
@@ -183,15 +339,111 @@ export class EventsGateway {
     // this.server.emit("new DESKTOP_CONTROLLER avaliable", socket.id)
   }
 
-  @SubscribeMessage("join session room")
-  onJoinSessionRoom(
-    @ConnectedSocket() socket: Socket,
-    @MessageBody() sessionRoomId: string
-  ) {
-    const room = this.activeSessions.get(sessionRoomId);
-    if (!room) throw new Error("Session not foudn");
-    room.join(socket);
+  @SubscribeMessage("rooms of user")
+  onRoomsOfUser(@ConnectedSocket() socket: Socket): void {
+    const ip = ipFromHeaders(socket);
+
+    const user = users.get(ip);
+    if (!user) return;
+
+    if (user.currentRoom) {
+      console.log(`[Dax] ${ip} already has a room, sending it back..`);
+      console.log(`---> Host: `, user.currentRoom.host.ip);
+      this.server.emit(
+        "rooms of user",
+        socket.id,
+        users.get(ip).currentRoom.id
+      );
+    }
   }
+
+  @SubscribeMessage("create room")
+  onCreateRoom(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() roomId: string
+  ): void {
+    const ip = ipFromHeaders(socket);
+    const user = users.get(ip);
+
+    if (!user) throw new Error("User not found by ip " + ip);
+
+    console.log(socket.id, "Requesting to create a room..", user.ip);
+
+    const createRoom = () => {
+      const room = new Room(roomId, this.server, user);
+      console.log("[Dax] Creating new room for ", ip);
+      console.log("[Dax] Room ID: ", room.id);
+
+      console.log("[Dax] Sending ", ip, " to ", room.id);
+      user.joinRoom({
+        id: room.id,
+      });
+
+      socket.join(roomId);
+
+      rooms.set(roomId, room);
+
+      this.server.emit("room created", roomId);
+    };
+
+    // check if user already has a room
+    if (user.currentRoom) {
+      console.log("[Dax] User already has a room: ", user.currentRoom.id);
+      console.log("---> Current host: ", user.currentRoom.host.ip);
+      return;
+    } else createRoom();
+
+    // console.log(room.id);
+  }
+
+  @SubscribeMessage("join room")
+  onJoinRoom(@ConnectedSocket() socket: Socket, @MessageBody() id: string) {
+    const room = rooms.get(id);
+    const ip = ipFromHeaders(socket);
+    const user = users.get(ip);
+
+    if (room.isActive) {
+      user.joinRoom({ id });
+    } else {
+      // logic for if a room isnt active...
+    }
+  }
+
+  @SubscribeMessage("pair controller to room")
+  onPairControllerToRoom(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() roomId: string
+  ): void {
+    const room = rooms.get(roomId);
+
+    if (!room) console.log("[Dax] Room not found: ", roomId);
+    console.log("[Dax] Controller requesting to pair to room: ", roomId);
+
+    const controller = new Controller({
+      id: randomUUID(),
+      socket: socket,
+      user: room.host,
+    });
+
+    socket.join(roomId);
+
+    socket.emit("controller paired", controller.id, roomId);
+
+    controller.socket
+      .to(room.id)
+      .emit("controller paired", controller.id, roomId);
+  }
+
+  // @SubscribeMessage("pair controller")
+  // onPairController(@ConnectedSocket() socket: Socket): void {
+  //   const ip = ipFromHeaders(socket);
+  //   const user = users.get(ip);
+
+  //   user.pair({
+  //     controllerId: randomUUID(),
+  //     socket,
+  //   });
+  // }
 
   @SubscribeMessage("device motion data")
   onDeviceMotionData(
@@ -239,15 +491,30 @@ export class EventsGateway {
   }
 
   @SubscribeMessage("finger tap on")
-  onFingerTapOn(@ConnectedSocket() socket: Socket): void {
-    console.log("[From Controller] Finger on:", socket.id);
-    this.server.emit("finger on screen", socket.id);
+  onFingerTapOn(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() roomId: string
+  ): void {
+    console.log("[From Controller] Finger on:", socket.id, `. Room: ${roomId}`);
+
+    this.server.to(roomId).emit("finger on screen", socket.id);
+    // this.server.emit("finger on screen", socket.id);
   }
 
   @SubscribeMessage("finger tap off")
-  onFingerTapOff(@ConnectedSocket() socket: Socket): void {
-    console.log("[From Controller] Finger off:", socket.id);
-    this.server.emit("finger off screen", socket.id);
+  onFingerTapOff(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() roomId: string
+  ): void {
+    // console.log(
+    //   "[From Controller] Finger off:",
+    //   socket.id,
+    //   `. Room: ${roomId}`
+    // );
+
+    this.server.to(roomId).emit("finger off screen", socket.id);
+
+    // this.server.emit("finger off screen", socket.id);
   }
 
   @SubscribeMessage("is phone supported")
@@ -255,28 +522,41 @@ export class EventsGateway {
     @MessageBody() isSupported: boolean,
     @ConnectedSocket() socket: Socket
   ): void {
-    console.log("[From Controller] Supported device: ", isSupported, socket.id);
+    // console.log("[From Controller] Supported device: ", isSupported, socket.id);
     this.server.emit("is phone supported", isSupported, socket.id);
   }
 
   @SubscribeMessage("play sound")
   onPlaySound(@ConnectedSocket() socket: Socket): void {
     console.log("[From Controller] Requesting to play sound:", socket.id);
-    this.server.emit("play sound", socket.id);
+
+    const ip = ipFromHeaders(socket);
+    const user = users.get(ip);
+
+    this.server.to(user.currentRoom.id).emit("play sound", socket.id);
   }
 
   @SubscribeMessage("xr active")
-  onXrActive(@ConnectedSocket() socket: Socket): void {
-    console.log("[From Controller] XR state is active ", socket.id);
+  onXrActive(
+    @MessageBody() roomId: string,
+    @ConnectedSocket() socket: Socket
+  ): void {
+    // console.log("[From Controller] XR state is active ", socket.id);
 
-    this.server.emit("xr active", socket.id);
+    console.log(`[Dax] Informing room ${roomId} about XR state.`);
+    this.server.to(roomId).emit("xr active", socket.id);
   }
 
   @SubscribeMessage("xr inactive")
-  onXrInactiveg(@ConnectedSocket() socket: Socket): void {
-    console.log("[From Controller] XR state is inactive ", socket.id);
+  onXrInactiveg(
+    @MessageBody() roomId: string,
+    @ConnectedSocket() socket: Socket
+  ): void {
+    // console.log("[From Controller] XR state is inactive ", socket.id);
 
-    this.server.emit("xr inactive", socket.id);
+    socket.emit("xr inactive", socket.id);
+
+    this.server.to(roomId).emit("xr inactive", socket.id);
   }
 
   @SubscribeMessage("debug")
@@ -288,9 +568,20 @@ export class EventsGateway {
   }
 
   @SubscribeMessage("sound placement from controller")
-  onSoundPlacementFromController(@MessageBody() position: any): void {
-    // console.log("[From Controller] Sound placement update", position);
-    this.server.emit("sound placement from server", position);
+  onSoundPlacementFromController(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() payload: any
+  ): void {
+    const { room, position } = payload;
+    console.log(room, position, payload);
+    // const { roomId, boxPositionPayload } = payload
+    // console.log(
+    //   `[Room ${payload.roomId}] Sound placement:, ${payload.boxPositionPayload}}`
+    // );
+    // socket.emit("sound placement from server", position);
+    // this.server.emit("sound placement from server", position);
+
+    this.server.to(room).emit("sound placement from controller", position);
   }
 
   @SubscribeMessage("add MOBILE_CONTROLLER to pairing pool")
