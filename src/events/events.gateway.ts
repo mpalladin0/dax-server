@@ -85,6 +85,7 @@ const ipFromHeaders = (socket: Socket) =>
     origin: "https://dax.michaelpalladino.io",
     credentials: true,
     allowedHeaders: ["userid", "connection_type"],
+    preflightContinue: true,
   },
   allowEIO3: true,
   allowUpgrades: true,
