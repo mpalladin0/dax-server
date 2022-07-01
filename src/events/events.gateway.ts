@@ -86,6 +86,8 @@ const ipFromHeaders = (socket: Socket) =>
     credentials: true,
     allowedHeaders: ["userid", "connection_type"],
     preflightContinue: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    optionsSuccessStatus: 200,
   },
   allowEIO3: true,
   allowUpgrades: true,
