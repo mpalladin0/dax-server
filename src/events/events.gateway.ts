@@ -6,7 +6,6 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from "@nestjs/websockets";
-import { instrument } from "@socket.io/admin-ui";
 import { Server, Socket } from "socket.io";
 import { Room, roomsMap } from "src/lib/Room";
 import { User, usersMap } from "src/lib/User";
@@ -83,8 +82,7 @@ const ipFromHeaders = (socket: Socket) =>
 
 @WebSocketGateway({
   cors: {
-    origin: ["https://admin.socket.io", "https://dax.michaelpalladino.io"],
-    credentials: true,
+    origin: ["https://dax.michaelpalladino.io"],
   },
   allowEIO3: true,
   allowUpgrades: true,
@@ -112,12 +110,12 @@ export class EventsGateway implements OnGatewayInit {
   }
 
   afterInit(server: Server) {
-    instrument(server, {
-      auth: false,
-      mode: "production",
-      readonly: true,
-      // mode: "development",
-    });
+    // instrument(server, {
+    //   auth: false,
+    //   mode: "production",
+    //   readonly: true,
+    //   // mode: "development",
+    // });
     // console.log("Server is ready! ", server);
   }
 
