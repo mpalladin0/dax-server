@@ -1,175 +1,20 @@
 import {
   ConnectedSocket,
   MessageBody,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from "@nestjs/websockets";
-import { randomUUID } from "crypto";
+import { instrument } from "@socket.io/admin-ui";
 import { Server, Socket } from "socket.io";
-import * as THREE from "three";
+import { Room, roomsMap } from "src/lib/Room";
+import { User, usersMap } from "src/lib/User";
 
 const desktopConnections = new Set<string>();
 const sessions = new Map<string, Room>();
 
-/**
- * <Room ID, Room Object>
- */
-const roomsMap = new Map<string, Room>();
-
-/** <socket.id, user> */
-const usersMap = new Map<string, User>();
-
 const userFromSocket = (socket: Socket) => usersMap.get(socket.id);
-
-class Controller {
-  public readonly controllerId: string;
-  public readonly belonngsTo: User;
-  public readonly socket: Socket;
-
-  constructor({
-    controllerId,
-    user,
-    socket,
-  }: {
-    controllerId: string;
-    user: User;
-    socket: Socket;
-  }) {
-    this.controllerId = controllerId;
-    this.belonngsTo = user;
-    this.socket = socket;
-  }
-}
-
-class User {
-  public readonly id: string;
-  public currentRoom: Room = null;
-  public readonly socket = new Set<Socket>();
-  private readonly server: Server;
-  controller: Controller;
-
-  // public controller;
-
-  constructor({
-    id,
-    socket,
-    server,
-  }: {
-    id: string;
-    socket: Socket;
-    server: Server;
-  }) {
-    this.id = id;
-    this.socket.add(socket);
-    this.server = server;
-
-    usersMap.set(id, this);
-
-    console.log(`[New User] User with id ${id} created and added to usersMap.`);
-  }
-
-  public joinRoom = ({ id }: { id: string }) => {
-    this.socket.forEach((socket) => {
-      console.log(`[Join Attempt] ${this.id} attempting to join ${id}`);
-      socket.join(id);
-    });
-
-    this.currentRoom = roomsMap.get(id);
-    console.log(
-      `[Join Success] ${this.id} joined room ${this.currentRoom.roomId}`
-    );
-  };
-
-  public pairController = ({
-    controllerId,
-    socket,
-    roomId,
-  }: {
-    controllerId: string;
-    socket: Socket;
-    roomId: string;
-  }) => {
-    socket.join(roomId);
-
-    this.controller = new Controller({
-      controllerId: controllerId,
-      socket: socket,
-      user: this,
-    });
-
-    this.server.to(roomId).emit("controller paired", roomId);
-
-    return this.controller;
-  };
-
-  public unpairController = () => {
-    if (this.controller && this.currentRoom) {
-      this.controller.socket.leave(this.currentRoom.roomId);
-      this.controller.socket.removeAllListeners();
-      this.controller.socket.disconnect();
-      this.controller = null;
-
-      return true;
-    } else {
-      return false;
-    }
-  };
-}
-class Room {
-  private readonly clock = new THREE.Clock();
-  readonly roomId: string;
-  host: User;
-  isPlaying = false;
-  isActive = true;
-  controller: Controller;
-  readonly listeners = new Set<User>();
-  private readonly server: Server;
-
-  constructor({
-    roomId,
-    server,
-    host,
-  }: {
-    roomId: string;
-    server: Server;
-    host: User;
-  }) {
-    roomsMap.set(roomId, this);
-    this.roomId = roomId;
-    this.host = host;
-    this.server = server;
-
-    this.host.joinRoom({
-      id: roomId,
-    });
-
-    server.on("sound ended", () => this.stop());
-  }
-
-  public readonly start = () => {
-    console.log("!! Starting sound");
-    if (this.clock.running) {
-      console.log("! Already plaing");
-      this.server
-        .to(this.roomId)
-        .emit("start sound", this.getCurrentPlaybackTime());
-    } else {
-      console.log("! Not running, starting from 0");
-      this.server.to(this.roomId).emit("start sound", 0);
-      this.clock.start();
-    }
-  };
-  public readonly stop = () => {
-    this.clock.stop();
-    this.clock.elapsedTime = 0;
-    this.clock.startTime = 0;
-  };
-  public readonly getCurrentPlaybackTime = () => {
-    if (this.clock.running) return this.clock.getElapsedTime();
-    else return 0;
-  };
-}
 
 /**
  * <User IP, Room Id>
@@ -238,12 +83,13 @@ const ipFromHeaders = (socket: Socket) =>
 
 @WebSocketGateway({
   cors: {
-    origin: "*",
+    origin: ["https://admin.socket.io", "https://dax.michaelpalladino.io"],
+    credentials: true,
   },
-  allowEIO3: true,
-  allowUpgrades: true,
+  // allowEIO3: true,
+  // allowUpgrades: true,
 })
-export class EventsGateway {
+export class EventsGateway implements OnGatewayInit {
   // <Id, isPaired>
   controller_mobile = new Map();
   controller_desktop = new Map();
@@ -263,6 +109,19 @@ export class EventsGateway {
   constructor() {
     // this.server.use(wrap(sessionMiddleware));
     // this.hanldeOnConnection();
+  }
+
+  afterInit(server: Server) {
+    instrument(server, {
+      auth: {
+        username: "mike",
+        password: "password1234",
+        type: "basic",
+      },
+      mode: "production",
+      // mode: "development",
+    });
+    // console.log("Server is ready! ", server);
   }
 
   @SubscribeMessage("mobile connection")
@@ -287,6 +146,9 @@ export class EventsGateway {
     const userId = socket.request.headers.userid as string;
     const user = usersMap.get(userId);
 
+    console.log("-------------");
+    console.log("[Dax] New desktop connection: ", userId);
+
     if (!user) {
       const newUser = new User({
         id: userId,
@@ -302,25 +164,28 @@ export class EventsGateway {
       user.socket.add(socket);
 
       if (user.currentRoom) {
+        console.log(
+          `[Dax] Already in room: ${user.currentRoom}, attempting to re-join.`
+        );
         user.joinRoom({
           id: user.currentRoom.roomId,
         });
 
-        const arr = Array.from(
-          this.server.sockets.adapter.rooms.get(user.currentRoom.roomId)
-        );
+        // const arr = Array.from(
+        //   this.server.sockets.adapter.rooms.get(user.currentRoom.roomId)
+        // );
 
-        arr.forEach((socketId) => {
-          const socket = this.server.sockets.sockets.get(socketId);
+        // arr.forEach((socketId) => {
+        // const socket = this.server.sockets.sockets.get(socketId);
 
-          console.log(
-            "THIS SOCKET BELONGS TO USER",
-            socket.id,
-            socket.connected
-          );
-        });
+        //   console.log(
+        //     "THIS SOCKET BELONGS TO USER",
+        //     socket.id,
+        //     socket.connected
+        //   );
+        // });
 
-        console.log("ROOMS OF USER", arr);
+        // console.log("ROOMS OF USER", arr);
 
         if (user.controller) {
           if (user.unpairController()) {
@@ -452,6 +317,8 @@ export class EventsGateway {
     // this.server.emit("audio buffer")
 
     // this.server.emit("new DESKTOP_CONTROLLER avaliable", socket.id)
+
+    return "ok";
   }
 
   @SubscribeMessage("rooms of user")
@@ -491,46 +358,110 @@ export class EventsGateway {
   @SubscribeMessage("create room")
   onCreateRoom(
     @ConnectedSocket() socket: Socket,
-    @MessageBody() payload: any
-  ): void {
-    console.log("????");
-    const { roomId, userId } = payload;
-    console.log(`[Room] Creating room: ${roomId} for user ${userId}`);
+    @MessageBody()
+    payload: {
+      roomId: string;
+    }
+  ) {
+    const userId = socket.request.headers.userid as string;
+    console.log("-------------");
+    console.log(
+      `[Room] Create requested. roomId: ${payload.roomId}, Requester: ${userId}`
+    );
 
-    if (roomsMap.get(roomId)) {
-      this.server.emit("room created", roomId);
+    if (!userId) {
+      return {
+        status: "error",
+        message: `userId is null or was not provided.`,
+      };
     }
 
+    if (!payload.roomId || payload.roomId === undefined) {
+      return {
+        status: "error",
+        message: "roomId not provided.",
+      };
+    }
+
+    const user = usersMap.get(userId);
+    if (!user) {
+      return {
+        status: "error",
+        message: "user not found",
+      };
+    }
+
+    if (user.currentRoom) {
+      return {
+        status: "error",
+        message: "user already has a room",
+      };
+    }
+
+    console.log(`[Room] Creating room: ${payload.roomId} for user ${userId}`);
+
     const room = new Room({
-      host: usersMap.get(userId)!,
-      roomId,
+      host: user,
+      roomId: payload.roomId,
       server: this.server,
     });
 
-    this.server.emit("room created", room.roomId);
-    // const ip = ipFromHeaders(socket);
-    // const user = usersMap.get(ip);
-    // if (!user) throw new Error("User not found by ip " + ip);
-    // console.log(socket.id, "Requesting to create a room..", user.id);
-    // const createRoom = () => {
-    //   const room = new Room(roomId, this.server, user);
-    //   console.log("[Dax] Creating new room for ", ip);
-    //   console.log("[Dax] Room ID: ", room.id);
-    //   console.log("[Dax] Sending ", ip, " to ", room.id);
-    //   user.joinRoom({
-    //     id: room.id,
-    //   });
-    //   socket.join(roomId);
-    //   roomsMap.set(roomId, room);
-    //   this.server.emit("room created", roomId);
-    // };
-    // check if user already has a room
-    // if (user.currentRoom) {
-    //   console.log("[Dax] User already has a room: ", user.currentRoom.roomId);
-    //   console.log("---> Current host: ", user.currentRoom.host.id);
-    //   return;
-    // } else createRoom();
-    // console.log(room.id);
+    user.joinRoom({
+      id: user.currentRoom.roomId,
+    });
+
+    console.log(`[Room - Created] ${room.roomId} for user ${userId}`);
+
+    return {
+      status: "ok",
+      message: `room created: ${room.roomId}`,
+    };
+  }
+
+  @SubscribeMessage("leave room")
+  async onLeaveRoom(@ConnectedSocket() socket: Socket) {
+    const userId = socket.handshake.headers.userid as string;
+    if (!userId) {
+      return {
+        status: "error",
+        message: "userid not provided or found",
+      };
+    }
+
+    const user = usersMap.get(userId);
+    if (!user) {
+      return {
+        status: "error",
+        message: "user not found",
+      };
+    }
+
+    if (user.currentRoom) {
+      console.log(`[User] Attempting to leave room ${user.currentRoom.roomId}`);
+
+      user.socket.forEach((socket) => {
+        socket.leave(user.currentRoom.roomId);
+      });
+
+      user.currentRoom = null;
+      console.log(`[User] Left room.`);
+
+      return {
+        status: "ok",
+        message: "left room",
+      };
+    }
+
+    if (!user.currentRoom) {
+      console.log(
+        `[Error] User has no room to leave ${user.currentRoom.roomId}`
+      );
+
+      return {
+        status: "error",
+        message: "user has no room to leave",
+      };
+    }
   }
 
   @SubscribeMessage("join room")
@@ -562,6 +493,8 @@ export class EventsGateway {
     // }
 
     const room = roomsMap.get(roomId);
+
+    if (room === undefined) return;
 
     if (!room) {
       console.log(`[Room - Creating] ID ${roomId}`);
@@ -636,34 +569,126 @@ export class EventsGateway {
   }
 
   @SubscribeMessage("destroy room")
-  onDestroyRoom(@ConnectedSocket() socket: Socket) {}
+  onDestroyRoom(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() roomId: string
+  ) {
+    const room = roomsMap.get(roomId);
+    room.listeners.forEach((listener) => {
+      listener.currentRoom = null;
+      listener.socket.forEach((socket) => {
+        socket.leave(roomId);
+      });
+    });
+
+    roomsMap.delete(roomId);
+  }
+
+  @SubscribeMessage("controller connection")
+  onControllerConnection(@ConnectedSocket() socket: Socket) {
+    console.log("-------------");
+    const controllerId = socket.handshake.headers.userid as string;
+    console.log("[Dax] New controller connection:", controllerId);
+
+    return "ok";
+  }
 
   @SubscribeMessage("pair controller to room")
   onPairControllerToRoom(
     @ConnectedSocket() socket: Socket,
     @MessageBody() roomId: string
-  ): void {
-    console.log(`[Controller] Requesting to pair to ${roomId}`);
+  ) {
+    const controllerId = socket.handshake.headers.userid as string;
+    if (!controllerId)
+      return {
+        status: "error",
+        message: "controllerid not found or provided",
+      };
+
+    console.log("-------------");
+    console.log(`[Controller] Requesting to pair to room: `);
+    console.log(`---> controllerId: ${controllerId}`);
+    console.log(`---> roomId: ${roomId}`);
+
+    if (!roomId) {
+      console.log(
+        `[Controller - Error] Room id not provided or found: ${roomId}`
+      );
+
+      return {
+        status: "error",
+        message: "roomId not found or provided",
+      };
+    }
+
     const room = roomsMap.get(roomId);
 
     if (!room) {
-      console.log("[Error] Room not found: ", roomId);
-      return;
+      `[Controller - Error] Requested room does not exist: ${roomId}`;
+
+      return {
+        status: "error",
+        message: "room not found or does not exist",
+      };
     }
 
-    room.host.pairController({
-      controllerId: randomUUID(),
-      roomId,
-      socket,
-    });
+    if (!room.host) {
+      return {
+        status: "error",
+        message: "room does not have a host",
+      };
+    }
+
+    socket.join(roomId);
+    this.server.to(roomId).emit("controller paired", roomId);
+
+    // room.host.pairController({
+    //   controllerId: randomUUID(),
+    //   roomId: roomId,
+    //   socket: socket,
+    // });
+
+    // socket.join(roomId);
+    // this.server.to(roomId).emit("controller paired", roomId);
+
+    return {
+      status: "ok",
+      message: `controller paired successfully to ${room.roomId}`,
+      context: {
+        roomId: room.roomId,
+      },
+    };
+
+    // if (roomId === null) {
+    //   console.log(
+    //   );
+    //   return;
+    // }
+
+    // if (!room) {
+    //   console.log("[Error] Room not found: ", roomId);
+    //   console.log("[Error - Resolving..] Attempting to create room now..");
+
+    //   const payload = {
+    //     roomId: roomId,
+    //   };
+    //   this.onCreateRoom(socket, payload);
+    //   return;
+    // }
+
+    // room.host.pairController({
+    //   controllerId: randomUUID(),
+    //   roomId,
+    //   socket,
+    // });
 
     // this.server.to(roomId).emit("controller paired", roomId);
 
     // controller.socket
     //   .to(roomId)
     //   .emit("controller paired", controller.controllerId);
-    this.server.to(socket.id).emit("controller paired", roomId);
-    socket.join(roomId);
+    // this.server.to(socket.id).emit("controller paired", roomId);
+    // socket.join(roomId);
 
     // this.server.emit("controller paired", roomId);
 
@@ -694,17 +719,6 @@ export class EventsGateway {
     //   .to(roomId)
     //   .emit("controller paired", controller.controllerId, roomId);
   }
-
-  // @SubscribeMessage("pair controller")
-  // onPairController(@ConnectedSocket() socket: Socket): void {
-  //   const ip = ipFromHeaders(socket);
-  //   const user = users.get(ip);
-
-  //   user.pair({
-  //     controllerId: randomUUID(),
-  //     socket,
-  //   });
-  // }
 
   @SubscribeMessage("device motion data")
   onDeviceMotionData(
@@ -767,11 +781,11 @@ export class EventsGateway {
     @ConnectedSocket() socket: Socket,
     @MessageBody() roomId: string
   ): void {
-    // console.log(
-    //   "[From Controller] Finger off:",
-    //   socket.id,
-    //   `. Room: ${roomId}`
-    // );
+    console.log(
+      "[From Controller] Finger off:",
+      socket.id,
+      `. Room: ${roomId}`
+    );
 
     this.server.to(roomId).emit("finger off screen", socket.id);
 
@@ -799,17 +813,31 @@ export class EventsGateway {
   onPlaySound(
     @ConnectedSocket() socket: Socket,
     @MessageBody() userId: string
-  ): void {
+  ) {
     console.log("[From Controller] Requesting to play sound:", socket.id);
 
     const user = usersMap.get(userId);
     if (!user) {
-      console.log("User not found!");
+      console.log("[Error] User not found!");
 
-      return;
+      return {
+        status: "error",
+        message: "user not found",
+      };
     }
 
-    user.currentRoom.start();
+    const room = user.currentRoom;
+    if (!room) {
+      return {
+        status: "error",
+        message: "room not found",
+      };
+    }
+
+    if (room.isPlaying) return;
+    else room.start({ socket });
+
+    // user.currentRoom.start({ socket });
 
     // const ip = ipFromHeaders(socket);
     // const user = usersMap.get(ip);
@@ -884,17 +912,18 @@ export class EventsGateway {
     @ConnectedSocket() socket: Socket,
     @MessageBody() payload: any
   ): void {
-    if (!payload) return;
     const { room, position } = payload;
-    console.log(room, position);
-    // const { roomId, boxPositionPayload } = payload
-    // console.log(
-    //   `[Room ${payload.roomId}] Sound placement:, ${payload.boxPositionPayload}}`
-    // );
-    // socket.emit("sound placement from server", position);
-    // this.server.emit("sound placement from server", position);
 
-    this.server.to(room).emit("sound placement from controller", position);
+    socket.to(room).emit("sound placement from controller", position);
+    // if (!payload) return;
+    // // console.log(room, position);
+    // // const { roomId, boxPositionPayload } = payload
+    // // console.log(
+    // //   `[Room ${payload.roomId}] Sound placement:, ${payload.boxPositionPayload}}`
+    // // );
+    // // socket.emit("sound placement from server", position);
+    // // this.server.emit("sound placement from server", position);
+    // this.server.to(room).emit("sound placement from controller", position);
   }
 
   @SubscribeMessage("add MOBILE_CONTROLLER to pairing pool")
