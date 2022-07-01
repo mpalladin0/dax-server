@@ -82,7 +82,7 @@ const ipFromHeaders = (socket: Socket) =>
 
 @WebSocketGateway({
   cors: {
-    origin: "https://dax.michaelpalladino.io",
+    origin: "*",
     credentials: true,
     allowedHeaders: ["userid", "connection_type"],
     methods: ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
