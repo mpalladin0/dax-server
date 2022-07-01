@@ -113,12 +113,9 @@ export class EventsGateway implements OnGatewayInit {
 
   afterInit(server: Server) {
     instrument(server, {
-      auth: {
-        username: "mike",
-        password: "password1234",
-        type: "basic",
-      },
+      auth: false,
       mode: "production",
+      readonly: true,
       // mode: "development",
     });
     // console.log("Server is ready! ", server);
