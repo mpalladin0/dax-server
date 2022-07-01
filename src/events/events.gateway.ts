@@ -86,7 +86,7 @@ const ipFromHeaders = (socket: Socket) =>
     credentials: true,
     allowedHeaders: ["userid", "connection_type"],
     methods: ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
-    optionsSuccessStatus: 200,
+    optionsSuccessStatus: 204,
     preflightContinue: true,
     maxAge: 600,
   },
