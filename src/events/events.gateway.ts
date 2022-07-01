@@ -86,8 +86,8 @@ const ipFromHeaders = (socket: Socket) =>
     origin: ["https://admin.socket.io", "https://dax.michaelpalladino.io"],
     credentials: true,
   },
-  // allowEIO3: true,
-  // allowUpgrades: true,
+  allowEIO3: true,
+  allowUpgrades: true,
 })
 export class EventsGateway implements OnGatewayInit {
   // <Id, isPaired>
