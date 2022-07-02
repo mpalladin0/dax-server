@@ -82,7 +82,7 @@ const ipFromHeaders = (socket: Socket) =>
 
 @WebSocketGateway({
   cors: {
-    origin: "https://dax.michaelpalladino.io",
+    origin: "*",
     // credentials: true,
     allowedHeaders: ["connection_type", "userid"],
     // methods: ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
@@ -354,6 +354,63 @@ export class EventsGateway implements OnGatewayInit {
     // } else {
     //   console.log("no rooms");
     // }
+  }
+
+  @SubscribeMessage("is buffer loaded")
+  onIsBufferLoaded(@ConnectedSocket() socket: Socket) {
+    const userId = socket.handshake.headers.userid as string;
+    // if (!userId) {
+    //   return false
+    // }
+
+    // const user = usersMap.get(userId)
+    // if (!user) {
+    //   return false
+    // }
+
+    // if (!user.currentRoom) {
+    //   return false
+    // }
+
+    // if (user.currentRoom.controller) {
+    //   return false
+    // }
+
+    // if (!user.currentRoom.controller.socket) {
+    //   return false
+    // }
+
+    // user.currentRoom.controller.socket.
+  }
+
+  @SubscribeMessage("buffer loaded")
+  onBufferLoaded(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() isLoaded: boolean
+  ) {
+    const userId = socket.handshake.headers.userid as string;
+    const user = usersMap.get(userId);
+
+    if (!user.currentRoom) return;
+
+    if (!userId)
+      return {
+        status: "error",
+        message: "userid not found",
+      };
+    socket.to(user.currentRoom.roomId).emit("buffer loaded");
+
+    // const user = usersMap.get(userId);
+    // if (!user) {
+    //   return {
+    //     status: "error",
+    //     message: "user not found",
+    //   };
+    // }
+
+    // this.server.to(user.currentRoom.roomId).emit("buffer loaded");
+    console.log("Buffer loaded", isLoaded);
+    return false;
   }
 
   @SubscribeMessage("create room")
@@ -642,6 +699,7 @@ export class EventsGateway implements OnGatewayInit {
 
     socket.join(roomId);
     this.server.to(roomId).emit("controller paired", roomId);
+    this.onIsBufferLoaded(socket);
 
     // room.host.pairController({
     //   controllerId: randomUUID(),
