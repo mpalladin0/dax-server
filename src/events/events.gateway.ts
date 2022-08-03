@@ -985,6 +985,32 @@ export class EventsGateway implements OnGatewayInit {
     // this.server.to(room).emit("sound placement from controller", position);
   }
 
+  @SubscribeMessage("sound placement from controller ios")
+  onSoundPlacementFromControllerIos(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() payload: any
+  ): void {
+    const { room, x, y, z } = payload;
+    const position = {
+      x: x,
+      y: y,
+      z: z,
+    };
+
+    console.log(room, payload);
+    console.log(position, x, y, z);
+    socket.to(room).emit("sound placement from controller", position);
+    // if (!payload) return;
+    // // console.log(room, position);
+    // // const { roomId, boxPositionPayload } = payload
+    // // console.log(
+    // //   `[Room ${payload.roomId}] Sound placement:, ${payload.boxPositionPayload}}`
+    // // );
+    // // socket.emit("sound placement from server", position);
+    // // this.server.emit("sound placement from server", position);
+    // this.server.to(room).emit("sound placement from controller", position);
+  }
+
   @SubscribeMessage("add MOBILE_CONTROLLER to pairing pool")
   onAdd_MOBILE_CONTROLLER(@ConnectedSocket() socket: Socket): void {
     console.log(
